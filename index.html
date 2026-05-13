@@ -65,7 +65,8 @@
   .obs-block { background: var(--off-white); border: 1.5px solid var(--border); border-radius: 14px; padding: 20px 22px; margin-bottom: 12px; transition: box-shadow 0.2s; }
   .obs-block:hover { box-shadow: 0 4px 20px rgba(27,67,50,0.08); }
   .obs-block:last-child { margin-bottom: 0; }
-  .obs-revision-badge { display: inline-flex; align-items: center; gap: 6px; font-size: 10px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; color: var(--mid-green); background: var(--pale-green); padding: 3px 10px; border-radius: 20px; margin-bottom: 8px; }
+  .obs-revision-badge { display: inline-flex; align-items: center; gap: 6px; font-size: 10px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; color: var(--mid-green); background: var(--pale-green); padding: 3px 10px; border-radius: 20px; margin-bottom: 6px; }
+  .obs-clase { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 600; color: var(--dark-green); background: rgba(27,67,50,0.07); border: 1px solid rgba(27,67,50,0.12); padding: 3px 10px; border-radius: 20px; margin-bottom: 10px; margin-left: 6px; }
   .obs-date { font-size: 12px; color: var(--muted); margin-bottom: 10px; }
   .obs-text { font-size: 14px; line-height: 1.78; color: var(--text); white-space: pre-line; }
   .obs-pct-row { display: flex; align-items: center; gap: 10px; margin-top: 14px; padding-top: 12px; border-top: 1.5px solid var(--border); }
@@ -171,7 +172,10 @@ function renderResult(doc, s) {
     }
     var profesor = o.profesor || s.profesor || '';
     obsHTML += '<div class="obs-block">';
-    obsHTML += '<div class="obs-revision-badge">&#128203; ' + escHtml(o.revision) + '</div>';
+    obsHTML += '<div style="margin-bottom:10px">';
+    obsHTML += '<span class="obs-revision-badge">&#128203; ' + escHtml(o.revision) + '</span>';
+    if (o.clase && o.clase !== 'nan') obsHTML += '<span class="obs-clase">&#127932; ' + escHtml(o.clase) + '</span>';
+    obsHTML += '</div>';
     if (fechaStr) obsHTML += '<div class="obs-date">&#128197; ' + fechaStr + '</div>';
     obsHTML += '<div class="obs-text">' + escHtml(o.observacion) + '</div>';
     obsHTML += '<div class="obs-pct-row"><span class="obs-pct-label">Avance:</span>';
