@@ -722,22 +722,42 @@ function tipoRevision(t) {
   if (/segund|2|\bii\b/.test(v)) return "r2";
   return "r1";
 }
-async function consultar(doc) {
+/* Formas posibles de leer las revisiones aprobadas en Supabase.
+   Se prueban en orden y se recuerda la primera que funcione. */
+const INTENTOS = [
+  { rpc: "revisiones_aprobadas", param: "p_documento" },
+  { rpc: "revisiones_aprobadas", param: "documento" },
+  { tabla: "revisiones_aprobadas", col: "documento" },
+  { tabla: "revisiones_aprobadas", col: "estudiante_documento" },
+  { tabla: "revisiones_aprobadas", col: "documento_estudiante" },
+  { tabla: "revisiones_aprobadas", col: "numero_documento" },
+  { rpc: "revisiones_aprobadas", param: "p_doc" },
+  { rpc: "revisiones_de_estudiante", param: "p_documento" }
+];
+let intentoOK = null;
+async function pedir(it, doc) {
+  const h = { "apikey": SUPABASE_KEY, "Accept": "application/json" };
   let res;
   try {
-    res = await fetch(SUPABASE_URL + "/rest/v1/rpc/revisiones_de_estudiante", {
-    method: "POST",
-    headers: { "apikey": SUPABASE_KEY, "Content-Type": "application/json", "Accept": "application/json" },
-    body: JSON.stringify({ p_documento: doc })
-  });
-  } catch (e) { throw new Error("No hubo conexión con Supabase (la red o la página donde está abierto el portal bloqueó la consulta)."); }
-  if (!res.ok) {
-    let det = "";
-    try { const j = await res.json(); det = [j.code, j.message || j.msg, j.hint].filter(Boolean).join(" · "); } catch (e) {}
-    throw new Error("Supabase respondió " + res.status + (det ? " — " + det : ""));
+    res = it.rpc
+      ? await fetch(SUPABASE_URL + "/rest/v1/rpc/" + it.rpc, { method: "POST", headers: Object.assign({ "Content-Type": "application/json" }, h), body: JSON.stringify({ [it.param]: doc }) })
+      : await fetch(SUPABASE_URL + "/rest/v1/" + it.tabla + "?select=*&" + it.col + "=eq." + encodeURIComponent(doc), { headers: h });
+  } catch (e) { const er = new Error("No hubo conexión con Supabase (la red o la página donde está abierto el portal bloqueó la consulta)."); er.fatal = true; throw er; }
+  if (res.ok) { const d = await res.json(); return Array.isArray(d) ? d : (d ? [d] : []); }
+  let det = "";
+  try { const j = await res.json(); det = [j.code, j.message || j.msg, j.hint].filter(Boolean).join(" · "); } catch (e) {}
+  const er = new Error("Supabase respondió " + res.status + (det ? " — " + det : ""));
+  er.fatal = !(res.status === 404 || res.status === 400);
+  throw er;
+}
+async function consultar(doc) {
+  if (intentoOK) return pedir(intentoOK, doc);
+  let ultimo = null;
+  for (const it of INTENTOS) {
+    try { const rows = await pedir(it, doc); intentoOK = it; return rows; }
+    catch (e) { ultimo = e; if (e.fatal) throw e; }
   }
-  const data = await res.json();
-  return Array.isArray(data) ? data : (data ? [data] : []);
+  throw ultimo || new Error("No se encontró la información de revisiones en Supabase.");
 }
 async function cargarAprobadas() {
   if (!student || sbCargando) return;
@@ -748,15 +768,15 @@ async function cargarAprobadas() {
     const m = {};
     rows.forEach(r => {
       if (campo(r, "aprobado", "aprobada") === false) return;
-      const clase = campo(r, "clase_nombre", "clase", "nombre_clase", "materia");
+      const clase = campo(r, "clase_nombre", "nombre_clase", "clase", "materia", "curso");
       const texto = campo(r, "observaciones", "observacion", "comentario", "comentarios", "texto", "revision");
       if (!clase || !texto) return;
       const k = slug(clase);
       const e = (m[k] = m[k] || { nombre: clase });
-      const key = tipoRevision(campo(r, "tipo", "revision_tipo", "numero", "corte"));
-      const fecha = campo(r, "aprobado_en", "fecha_aprobacion", "updated_at", "created_at");
+      const key = tipoRevision(campo(r, "tipo", "tipo_revision", "revision_tipo", "numero_revision", "numero", "corte", "periodo"));
+      const fecha = campo(r, "aprobado_en", "aprobada_en", "fecha_aprobacion", "fecha_aprobado", "updated_at", "created_at");
       if (e[key] && e[key].fecha && fecha && new Date(e[key].fecha) > new Date(fecha)) return;
-      e[key] = { texto: String(texto), fecha, profesor: campo(r, "profesor_nombre", "profesor", "docente") };
+      e[key] = { texto: String(texto), fecha, profesor: campo(r, "profesor_nombre", "nombre_profesor", "profesor", "docente") };
     });
     sbRevs = m; sbFallo = false; sbError = "";
   } catch (e) { sbFallo = true; sbError = e.message || String(e); console.warn("Revisiones Supabase:", e); }
