@@ -679,7 +679,7 @@ const ESTUDIANTES = {"salt": "musicpass-uis-2026-2-976e1885292409de", "iter": 15
 const SUPABASE_URL = "https://hawxndssqzdxgdgsqukk.supabase.co";
 const SUPABASE_KEY = "sb_publishable_OUdOKVKCDoT77shfVNKRkA_Dqdg1x3A";
 
-let student = null, sbRevs = {}, sbFallo = false, sbCargando = false;
+let student = null, docIngresado = null, sbRevs = {}, sbFallo = false, sbCargando = false;
 
 /* helpers */
 const slug = s => (s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "sin-nombre";
@@ -714,24 +714,45 @@ async function buscarEstudiante(doc) {
   return JSON.parse(new TextDecoder().decode(pt));
 }
 
+/* Lee las revisiones aprobadas del estudiante en Supabase.
+   Acepta varios nombres de columna para tolerar cambios en la función revisiones_de_estudiante. */
+const campo = (r, ...ks) => { for (const k of ks) if (r[k] != null && r[k] !== "") return r[k]; return null; };
+function tipoRevision(t) {
+  const v = String(t == null ? "" : t).toLowerCase();
+  if (/segund|2|\bii\b/.test(v)) return "r2";
+  return "r1";
+}
+async function consultar(doc) {
+  const res = await fetch(SUPABASE_URL + "/rest/v1/rpc/revisiones_de_estudiante", {
+    method: "POST",
+    headers: { "apikey": SUPABASE_KEY, "Content-Type": "application/json", "Accept": "application/json" },
+    body: JSON.stringify({ p_documento: doc })
+  });
+  if (!res.ok) throw new Error("HTTP " + res.status);
+  const data = await res.json();
+  return Array.isArray(data) ? data : (data ? [data] : []);
+}
 async function cargarAprobadas() {
   if (!student || sbCargando) return;
   sbCargando = true;
   try {
-    const res = await fetch(SUPABASE_URL + "/rest/v1/rpc/revisiones_de_estudiante", {
-      method: "POST",
-      headers: { "apikey": SUPABASE_KEY, "Content-Type": "application/json" },
-      body: JSON.stringify({ p_documento: student.documento })
-    });
-    if (!res.ok) throw new Error(res.status);
-    const rows = await res.json();
+    const docs = [...new Set([student.documento, docIngresado].filter(Boolean))];
+    const rows = (await Promise.all(docs.map(consultar))).flat();
     const m = {};
     rows.forEach(r => {
-      const k = slug(r.clase_nombre);
-      (m[k] = m[k] || {})[r.tipo === "primera" ? "r1" : "r2"] = { texto: r.observaciones, fecha: r.aprobado_en, profesor: r.profesor_nombre };
+      if (campo(r, "aprobado", "aprobada") === false) return;
+      const clase = campo(r, "clase_nombre", "clase", "nombre_clase", "materia");
+      const texto = campo(r, "observaciones", "observacion", "comentario", "comentarios", "texto", "revision");
+      if (!clase || !texto) return;
+      const k = slug(clase);
+      const e = (m[k] = m[k] || { nombre: clase });
+      const key = tipoRevision(campo(r, "tipo", "revision_tipo", "numero", "corte"));
+      const fecha = campo(r, "aprobado_en", "fecha_aprobacion", "updated_at", "created_at");
+      if (e[key] && e[key].fecha && fecha && new Date(e[key].fecha) > new Date(fecha)) return;
+      e[key] = { texto: String(texto), fecha, profesor: campo(r, "profesor_nombre", "profesor", "docente") };
     });
     sbRevs = m; sbFallo = false;
-  } catch (e) { sbFallo = true; }
+  } catch (e) { sbFallo = true; console.warn("Revisiones Supabase:", e); }
   sbCargando = false;
   renderRevisiones();
 }
@@ -748,14 +769,14 @@ $("loginForm").addEventListener("submit", async e => {
   try {
     const s = await buscarEstudiante(doc);
     if (!s) { show($("loginMsg"), "No encontramos un estudiante con ese documento. Revisa el número o escribe a la coordinación de los Cursos de Música.", "err"); return; }
-    abrir(s);
+    abrir(s, doc);
   } catch (err) {
     show($("loginMsg"), "No se pudo abrir tu Music Pass. Intenta de nuevo.", "err");
   } finally { $("loginBtn").disabled = false; }
 });
 
-function abrir(s) {
-  student = s; sbRevs = {}; sbFallo = false;
+function abrir(s, doc) {
+  student = s; docIngresado = doc; sbRevs = {}; sbFallo = false;
   $("docInput").value = ""; show($("loginMsg"), "", "info");
   selectTab("pass");
   renderStudent();
@@ -810,6 +831,8 @@ function renderRevisiones() {
   const list = $("revList"); list.textContent = "";
   if (sbFallo) list.append(el("div", { class: "msg info", style: "margin-bottom:12px", text: "No pudimos consultar las revisiones en este momento. Intenta de nuevo más tarde." }));
   const lista = sortClases(student.clases || []);
+  const propias = new Set(lista.map(slug));
+  Object.keys(sbRevs).forEach(k => { if (!propias.has(k)) lista.push(sbRevs[k].nombre); });
   if (!lista.length) { list.append(el("div", { class: "card empty", text: "Aún no tienes clases asignadas." })); return; }
   lista.forEach(m => {
     const k = CLASES[m], sr = sbRevs[slug(m)] || {};
