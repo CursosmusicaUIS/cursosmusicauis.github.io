@@ -715,49 +715,85 @@ async function buscarEstudiante(doc) {
 }
 
 /* Lee las revisiones aprobadas del estudiante en Supabase.
-   Acepta varios nombres de columna para tolerar cambios en la función revisiones_de_estudiante. */
+   Acepta varios nombres de columna para tolerar diferencias en revisiones_aprobadas. */
 const campo = (r, ...ks) => { for (const k of ks) if (r[k] != null && r[k] !== "") return r[k]; return null; };
 function tipoRevision(t) {
   const v = String(t == null ? "" : t).toLowerCase();
   if (/segund|2|\bii\b/.test(v)) return "r2";
   return "r1";
 }
-/* Formas posibles de leer las revisiones aprobadas en Supabase.
-   Se prueban en orden y se recuerda la primera que funcione. */
-const INTENTOS = [
-  { rpc: "revisiones_aprobadas", param: "p_documento" },
-  { rpc: "revisiones_aprobadas", param: "documento" },
-  { tabla: "revisiones_aprobadas", col: "documento" },
-  { tabla: "revisiones_aprobadas", col: "estudiante_documento" },
-  { tabla: "revisiones_aprobadas", col: "documento_estudiante" },
-  { tabla: "revisiones_aprobadas", col: "numero_documento" },
-  { rpc: "revisiones_aprobadas", param: "p_doc" },
-  { rpc: "revisiones_de_estudiante", param: "p_documento" }
-];
-let intentoOK = null;
-async function pedir(it, doc) {
-  const h = { "apikey": SUPABASE_KEY, "Accept": "application/json" };
+/* ===== Lectura de revisiones aprobadas en Supabase =====
+   "revisiones_aprobadas" puede ser una función o una tabla/vista; el portal
+   prueba varias formas, recuerda la que funcione y, si ninguna sirve, muestra
+   el mensaje que dio Supabase para "revisiones_aprobadas" (con su pista). */
+const FUENTE = "revisiones_aprobadas";
+const norm = s => String(s == null ? "" : s).normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]/g, "");
+const COLS_DOC = c => /doc|cedula|identific|^dni$|^cc$/.test(c);
+const COLS_NOMBRE = c => /estudiante|alumno/.test(c) && /nombre|estudiante$|alumno$/.test(c) || c === "nombre_completo" || c === "nombre";
+const H = () => ({ "apikey": SUPABASE_KEY, "Accept": "application/json" });
+
+async function llamar(url, opt) {
   let res;
-  try {
-    res = it.rpc
-      ? await fetch(SUPABASE_URL + "/rest/v1/rpc/" + it.rpc, { method: "POST", headers: Object.assign({ "Content-Type": "application/json" }, h), body: JSON.stringify({ [it.param]: doc }) })
-      : await fetch(SUPABASE_URL + "/rest/v1/" + it.tabla + "?select=*&" + it.col + "=eq." + encodeURIComponent(doc), { headers: h });
-  } catch (e) { const er = new Error("No hubo conexión con Supabase (la red o la página donde está abierto el portal bloqueó la consulta)."); er.fatal = true; throw er; }
+  try { res = await fetch(url, opt); }
+  catch (e) { const er = new Error("No hubo conexión con Supabase (la red o la página donde está abierto el portal bloqueó la consulta)."); er.red = true; throw er; }
   if (res.ok) { const d = await res.json(); return Array.isArray(d) ? d : (d ? [d] : []); }
   let det = "";
-  try { const j = await res.json(); det = [j.code, j.message || j.msg, j.hint].filter(Boolean).join(" · "); } catch (e) {}
+  try { const j = await res.json(); det = [j.code, j.message || j.msg, j.details, j.hint].filter(Boolean).join(" · "); } catch (e) {}
   const er = new Error("Supabase respondió " + res.status + (det ? " — " + det : ""));
-  er.fatal = !(res.status === 404 || res.status === 400);
-  throw er;
+  er.status = res.status; throw er;
 }
-async function consultar(doc) {
-  if (intentoOK) return pedir(intentoOK, doc);
-  let ultimo = null;
-  for (const it of INTENTOS) {
-    try { const rows = await pedir(it, doc); intentoOK = it; return rows; }
-    catch (e) { ultimo = e; if (e.fatal) throw e; }
+const rpc = (fn, args) => llamar(SUPABASE_URL + "/rest/v1/rpc/" + fn, { method: "POST", headers: Object.assign({ "Content-Type": "application/json" }, H()), body: JSON.stringify(args) });
+const tabla = (t, q) => llamar(SUPABASE_URL + "/rest/v1/" + t + "?" + q, { headers: H() });
+
+/* ¿la fila es de este estudiante? (por documento o por nombre) */
+function esDelEstudiante(r) {
+  const docs = [student.documento, docIngresado].filter(Boolean).map(norm);
+  const nom = norm(student.nombre);
+  for (const k in r) {
+    const c = k.toLowerCase(), v = r[k];
+    if (v == null || typeof v === "object") continue;
+    if (COLS_DOC(c) && docs.includes(norm(v))) return true;
+    if (COLS_NOMBRE(c) && nom && norm(v) === nom) return true;
   }
-  throw ultimo || new Error("No se encontró la información de revisiones en Supabase.");
+  return false;
+}
+
+let modoOK = null;           // forma que funcionó
+let colsTabla = null;        // columnas de la tabla, si es tabla
+const MODOS = [
+  { id: "rpc_p_documento", run: d => rpc(FUENTE, { p_documento: d }) },
+  { id: "rpc_documento", run: d => rpc(FUENTE, { documento: d }) },
+  { id: "rpc_p_doc", run: d => rpc(FUENTE, { p_doc: d }) },
+  { id: "rpc_sin_param", run: async () => (await rpc(FUENTE, {})).filter(esDelEstudiante) },
+  { id: "tabla", run: async d => {
+      if (!colsTabla) { const muestra = await tabla(FUENTE, "select=*&limit=1"); colsTabla = muestra.length ? Object.keys(muestra[0]) : []; }
+      if (!colsTabla.length) return [];
+      const cDoc = colsTabla.filter(c => COLS_DOC(c.toLowerCase()));
+      const cNom = colsTabla.filter(c => COLS_NOMBRE(c.toLowerCase()));
+      const out = [];
+      for (const c of cDoc) out.push(...await tabla(FUENTE, "select=*&" + c + "=eq." + encodeURIComponent(d)));
+      if (!out.length) for (const c of cNom) {
+        const palabras = (student.nombre || "").split(/\s+/).filter(w => w.length > 2).slice(0, 2);
+        if (!palabras.length) continue;
+        const filtros = palabras.map(w => c + ".ilike.*" + encodeURIComponent(w.normalize("NFD").replace(/[̀-ͯ]/g, "").slice(1)) + "*").join(",");
+        out.push(...(await tabla(FUENTE, "select=*&and=(" + filtros + ")")).filter(esDelEstudiante));
+      }
+      return out;
+    } }
+];
+
+async function consultar(doc) {
+  if (modoOK) return modoOK.run(doc);
+  let primero = null, mejor = null;
+  for (const m of MODOS) {
+    try { const rows = await m.run(doc); modoOK = m; return rows; }
+    catch (e) {
+      if (e.red) throw e;
+      if (!primero) primero = e;
+      if (!mejor && /hint|Perhaps|quiso|permission|denied|401|403/i.test(e.message)) mejor = e;
+    }
+  }
+  throw mejor || primero || new Error("No se encontró " + FUENTE + " en Supabase.");
 }
 async function cargarAprobadas() {
   if (!student || sbCargando) return;
