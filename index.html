@@ -910,7 +910,7 @@ function renderRevisiones() {
     [["r1", "Primera revisión"], ["r2", "Segunda revisión"]].forEach(([key, label]) => {
       const rk = sr[key];
       if (!rk || !rk.texto) {
-        cols.append(el("div", { class: "rev locked" }, el("span", { text: "🔒", "aria-hidden": "true" }), el("div", {}, el("h4", { text: label, style: "margin:0" }), el("span", { text: "Aparecerá aquí cuando tu profesor la cargue y sea aprobada." }))));
+        cols.append(el("div", { class: "rev locked" }, el("span", { text: "🔒", "aria-hidden": "true" }), el("div", {}, el("h4", { text: label, style: "margin:0" }), el("span", { text: "Aparecerá aquí cuando tu profesor la cargue en el sistema." }))));
         return;
       }
       const box = el("div", { class: "rev" }, el("h4", { text: label }), el("p", { text: rk.texto }));
